@@ -102,8 +102,8 @@ export function PlayerRig() {
   useEffect(() => {
     if (!owned) return;
     // deliver the car right next to the player
-    car.current.x = ped.current.x + 5;
-    car.current.z = ped.current.z + 1;
+    car.current.x = ped.current.x + 3.2;
+    car.current.z = ped.current.z;
     car.current.h = 0;
     car.current.vf = 0;
     car.current.vl = 0;
@@ -129,7 +129,7 @@ export function PlayerRig() {
         const c = car.current;
         const hasCar = !!activeCar(s);
         const d = hasCar ? Math.hypot(ped.current.x - c.x, ped.current.z - c.z) : Infinity;
-        if (d < 3.5) {
+        if (d < 4.6) {
           s.setDriving(true);
           s.say("PRESS F TO START ENGINE");
         } else if (s.nearPoi) {
