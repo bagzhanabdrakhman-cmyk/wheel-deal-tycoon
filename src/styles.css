@@ -62,6 +62,16 @@
 }
 
 :root {
+  /* Automotive HUD tokens */
+  --font-hud: "Rajdhani", "Barlow Condensed", system-ui, sans-serif;
+  --hud-fg: #eef3f8;
+  --hud-dim: #8b97a3;
+  --hud-panel: #0b0f14cc;
+  --hud-line: #ffffff26;
+  --hud-accent: #f2a71b;
+  --hud-good: #35d06a;
+  --hud-bad: #ec4747;
+
   --radius: 0.625rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.129 0.042 264.695);
