@@ -275,3 +275,8 @@ export const useGame = create<GameState>((set, get) => ({
 export function activeCar(s: GameState = useGame.getState()) {
   return s.garage.find((c) => c.uid === s.activeCarUid) ?? null;
 }
+
+// Dev/debug hook: inspect game state from the console.
+if (typeof window !== "undefined") {
+  (window as unknown as { __game?: unknown }).__game = useGame;
+}
