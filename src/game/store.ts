@@ -86,6 +86,7 @@ interface GameState {
   driving: boolean;
   engineOn: boolean;
   camera: CameraMode;
+  fpv: boolean;
   panel: Panel;
   nearPoi: PoiId | null;
   nearCar: boolean;
@@ -102,6 +103,7 @@ interface GameState {
   setDriving: (v: boolean) => void;
   setEngine: (v: boolean) => void;
   cycleCamera: () => void;
+  toggleFpv: () => void;
   setPanel: (p: Panel) => void;
   setNearPoi: (p: PoiId | null) => void;
   setNearCar: (v: boolean) => void;
@@ -127,6 +129,7 @@ export const useGame = create<GameState>((set, get) => ({
   driving: false,
   engineOn: false,
   camera: "third",
+  fpv: false,
   panel: null,
   nearPoi: null,
   nearCar: false,
@@ -186,6 +189,7 @@ export const useGame = create<GameState>((set, get) => ({
     set((s) => ({
       camera: s.camera === "third" ? "hood" : s.camera === "hood" ? "interior" : "third",
     })),
+  toggleFpv: () => set((s) => ({ fpv: !s.fpv })),
   setPanel: (p) => set({ panel: p }),
   setNearPoi: (p) => set((s) => (s.nearPoi === p ? s : { nearPoi: p })),
   setNearCar: (v) => set((s) => (s.nearCar === v ? s : { nearCar: v })),
@@ -271,6 +275,19 @@ export const useGame = create<GameState>((set, get) => ({
 
   refreshMarket: () => set((s) => ({ market: rollMarket(s.money) })),
 }));
+
+/** Simple objective chain derived from live game state. */
+export function currentObjective(s: GameState): string {
+  const car = s.garage.find((c) => c.uid === s.activeCarUid) ?? null;
+  if (!car) return "Find a cheap car at the USED CAR MARKET";
+  const parts = Object.values(car.condition) as number[];
+  const avg = parts.reduce((a, b) => a + b, 0) / parts.length;
+  if (!s.driving && !s.nearCar) return "Walk back to your car and press E";
+  if (!s.driving) return "Press E to get in the driver's seat";
+  if (!s.engineOn) return "Press F to start the engine";
+  if (avg < 72) return "Drive to the REPAIR SHOP and fix the car";
+  return "Drive to the DEALERSHIP and sell for profit";
+}
 
 export function activeCar(s: GameState = useGame.getState()) {
   return s.garage.find((c) => c.uid === s.activeCarUid) ?? null;

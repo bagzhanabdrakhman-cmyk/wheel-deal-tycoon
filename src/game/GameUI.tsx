@@ -15,7 +15,8 @@ import {
   type PartKey,
 } from "./data";
 import { openPoi } from "./PlayerRig";
-import { getDef, useGame, type OwnedCar } from "./store";
+import { currentObjective, getDef, useGame, type OwnedCar } from "./store";
+import { Minimap } from "./Minimap";
 import { MobileControls } from "./MobileControls";
 
 function Bar({ v }: { v: number }) {
@@ -82,7 +83,7 @@ export function GameUI() {
             </div>
             <div className="speedo-meta">
               <span className={s.engineOn ? "led on" : "led"}>ENGINE</span>
-              <span>{s.driving ? s.camera.toUpperCase() : "ON FOOT"}</span>
+              <span>{s.driving ? s.camera.toUpperCase() : s.fpv ? "FIRST PERSON" : "ON FOOT"}</span>
             </div>
           </div>
           {car && def && (
@@ -93,6 +94,14 @@ export function GameUI() {
           )}
         </div>
 
+        <div className="hud-right">
+          <Minimap />
+          <div className="objective">
+            <span>OBJECTIVE</span>
+            <strong>{currentObjective(s)}</strong>
+          </div>
+        </div>
+
         <div className="hud-prompts">
           {poi && (
             <button className="prompt" onClick={() => openPoi(poi.id)}>
@@ -100,7 +109,7 @@ export function GameUI() {
             </button>
           )}
           {!s.driving && s.nearCar && (
-            <div className="prompt ghost">PRESS E TO ENTER THE CAR</div>
+            <div className="prompt ghost">ENTER VEHICLE — E</div>
           )}
           {s.driving && !s.engineOn && <div className="prompt ghost">PRESS F TO START ENGINE</div>}
         </div>
@@ -399,13 +408,15 @@ function Help() {
     <div className="help">
       <h3>Desktop</h3>
       <ul>
-        <li>W — gas · S — brake / reverse · A / D — steer</li>
+        <li>On foot: W A S D walk · SHIFT run · CTRL crouch · drag mouse to look · scroll to zoom</li>
+        <li>Driving: W — gas · S — brake / reverse · A / D — steer</li>
         <li>Space — handbrake (drift) · F — start engine</li>
         <li>E — enter / exit car, enter a shop on foot · C — change camera</li>
       </ul>
       <h3>Mobile</h3>
       <ul>
-        <li>Left arrows steer, GAS / BRAKE on the right, HAND for the handbrake</li>
+        <li>On foot: left thumbstick walks, RUN / CROUCH on the right, drag the screen to look</li>
+        <li>Driving: left arrows steer, GAS / BRAKE on the right, HAND for the handbrake</li>
         <li>START, CAM and ENTER buttons mirror F, C and E</li>
       </ul>
       <h3>The loop</h3>

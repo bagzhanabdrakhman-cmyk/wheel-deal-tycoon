@@ -1,7 +1,9 @@
 import { useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { CarModel } from "./CarModel";
+import { Character, type CharState } from "./Character";
+import { CarInterior } from "./CarInterior";
 import {
   BUILDINGS,
   CITY_LIMIT,
@@ -10,7 +12,7 @@ import {
   ROAD_LINES,
   type Box,
 } from "./data";
-import { onTap, pollInput } from "./input";
+import { look, onTap, pollInput } from "./input";
 import { activeCar, getDef, useGame } from "./store";
 import { worldState } from "./trafficState";
 
@@ -61,6 +63,14 @@ function collide(x: number, z: number, r: number) {
   return { x: px, z: pz, hit };
 }
 
+/** True if the point sits inside any building box (used for camera pull-in). */
+function blocked(x: number, z: number) {
+  for (const b of STATIC) {
+    if (Math.abs(x - b.x) < b.w / 2 + 0.4 && Math.abs(z - b.z) < b.d / 2 + 0.4) return true;
+  }
+  return false;
+}
+
 function onRoad(x: number, z: number) {
   for (const l of ROAD_LINES) {
     if (Math.abs(x - l) < ROAD_HALF || Math.abs(z - l) < ROAD_HALF) return true;
@@ -80,18 +90,23 @@ export function PlayerRig() {
     steer: 0,
     bounce: 0,
   });
-  const ped = useRef({ x: SPAWN.x + 4, z: SPAWN.z + 2, h: Math.PI });
+  const ped = useRef({ x: SPAWN.x + 4, z: SPAWN.z + 2, h: Math.PI, speed: 0 });
+  /** enter/exit cinematic timer: >0 while the character is getting in/out */
+  const seq = useRef<{ t: number; mode: "in" | "out"; fromX: number; fromZ: number } | null>(null);
   const carGroup = useRef<THREE.Group>(null);
   const pedGroup = useRef<THREE.Group>(null);
+  const doorRef = useRef<THREE.Group>(null);
   const camPos = useRef(new THREE.Vector3(SPAWN.x, 8, SPAWN.z + 14));
   const camLook = useRef(new THREE.Vector3(SPAWN.x, 1.5, SPAWN.z));
   const acc = useRef(0);
   const { camera } = useThree();
+  const [charState, setCharState] = useState<CharState>("idle");
 
   const owned = useGame((s) => s.garage.find((c) => c.uid === s.activeCarUid) ?? null);
   const driving = useGame((s) => s.driving);
   const engineOn = useGame((s) => s.engineOn);
   const camMode = useGame((s) => s.camera);
+  const fpv = useGame((s) => s.fpv);
   const rain = useGame((s) => s.rain);
   const tod = useGame((s) => s.timeOfDay);
   const night = tod < 6.5 || tod > 18.5;
@@ -101,8 +116,7 @@ export function PlayerRig() {
   // reset car placement when a different car is spawned
   useEffect(() => {
     if (!owned) return;
-    // deliver the car right next to the player
-    car.current.x = ped.current.x + 3.2;
+    car.current.x = ped.current.x + 3.6;
     car.current.z = ped.current.z;
     car.current.h = 0;
     car.current.vf = 0;
@@ -116,27 +130,36 @@ export function PlayerRig() {
         s.setEngine(!s.engineOn);
         s.say(!s.engineOn ? "ENGINE STARTED" : "ENGINE OFF");
       }
-      if (t === "camera") s.cycleCamera();
+      if (t === "camera") {
+        if (s.driving) s.cycleCamera();
+        else {
+          s.toggleFpv();
+          s.say(!s.fpv ? "FIRST PERSON" : "THIRD PERSON");
+        }
+      }
       if (t === "enter") {
+        if (seq.current) return;
         if (s.driving) {
-          s.setDriving(false);
           const c = car.current;
-          ped.current.x = c.x + Math.cos(c.h) * 2.6;
-          ped.current.z = c.z + Math.sin(c.h) * 2.6;
-          s.say("EXITED VEHICLE");
+          if (Math.abs(c.vf) > 3) return s.say("STOP THE CAR FIRST");
+          seq.current = { t: 0, mode: "out", fromX: c.x, fromZ: c.z };
+          s.setDriving(false);
+          const side = Math.cos(c.h);
+          const sidez = Math.sin(c.h);
+          ped.current.x = c.x + side * 1.9 + Math.sin(c.h) * -0.4;
+          ped.current.z = c.z - sidez * 1.9 - Math.cos(c.h) * -0.4;
+          s.say("EXITED VEHICLE — DOOR CLOSED");
           return;
         }
         const c = car.current;
         const hasCar = !!activeCar(s);
         const d = hasCar ? Math.hypot(ped.current.x - c.x, ped.current.z - c.z) : Infinity;
-        if (d < 4.6) {
-          s.setDriving(true);
-          s.say("PRESS F TO START ENGINE");
-        } else if (s.nearPoi) {
+        if (s.nearPoi && d > 4.6) {
           openPoi(s.nearPoi);
         } else if (d < 7) {
-          s.setDriving(true);
-          s.say("PRESS F TO START ENGINE");
+          seq.current = { t: 0, mode: "in", fromX: ped.current.x, fromZ: ped.current.z };
+        } else if (s.nearPoi) {
+          openPoi(s.nearPoi);
         } else if (!hasCar) {
           s.say("NO CAR — VISIT THE USED CAR MARKET");
         } else {
@@ -150,6 +173,7 @@ export function PlayerRig() {
   }, []);
 
   const tmp = useMemo(() => new THREE.Vector3(), []);
+  const tmp2 = useMemo(() => new THREE.Vector3(), []);
 
   useFrame((_, rawDelta) => {
     const dt = Math.min(rawDelta, 0.05);
@@ -157,6 +181,39 @@ export function PlayerRig() {
     if (s.panel) return; // pause world interaction while a menu is open
     const inp = pollInput();
     const c = car.current;
+
+    // ---- camera orbit input ----
+    look.yaw -= look.dx * 0.0032;
+    look.pitch = Math.max(-0.5, Math.min(1.05, look.pitch + look.dy * 0.0026));
+    look.dist = Math.max(1.4, Math.min(9, look.dist + look.zoom * 0.35));
+    look.dx = 0;
+    look.dy = 0;
+    look.zoom = 0;
+
+    // ---- enter / exit sequence ----
+    if (seq.current) {
+      seq.current.t += dt;
+      const q = seq.current;
+      const doorX = c.x + Math.cos(c.h) * 1.5;
+      const doorZ = c.z - Math.sin(c.h) * 1.5;
+      if (q.mode === "in") {
+        const k = Math.min(1, q.t / 1.15);
+        ped.current.x = THREE.MathUtils.lerp(q.fromX, doorX, Math.min(1, k * 1.6));
+        ped.current.z = THREE.MathUtils.lerp(q.fromZ, doorZ, Math.min(1, k * 1.6));
+        ped.current.h = Math.atan2(c.x - ped.current.x, c.z - ped.current.z);
+        setCharState(k < 0.62 ? "walk" : "enter");
+        if (k >= 1) {
+          seq.current = null;
+          setCharState("sit");
+          s.setDriving(true);
+          s.say("PRESS F TO START ENGINE");
+        }
+      } else {
+        const k = Math.min(1, q.t / 0.9);
+        setCharState(k < 0.5 ? "enter" : "idle");
+        if (k >= 1) seq.current = null;
+      }
+    }
 
     if (s.driving && def && owned) {
       const cond = owned.condition;
@@ -223,23 +280,39 @@ export function PlayerRig() {
       c.z = res.z;
       c.wheelSpin -= (c.vf * dt) / 0.35;
       c.bounce *= Math.exp(-6 * dt);
+      ped.current.x = c.x;
+      ped.current.z = c.z;
     } else {
       c.vf *= Math.exp(-3 * dt);
       c.steer *= 0.9;
-      // walking
+      // ---- on-foot movement, camera relative ----
       const p = ped.current;
-      const yaw = Math.atan2(camera.position.x - p.x, camera.position.z - p.z);
-      const spd = 7;
-      const mvz = inp.forward;
-      const mvx = inp.strafe;
-      if (mvx || mvz) {
-        const dirX = -Math.sin(yaw) * mvz + Math.cos(yaw) * mvx;
-        const dirZ = -Math.cos(yaw) * mvz - Math.sin(yaw) * mvx;
-        const len = Math.hypot(dirX, dirZ) || 1;
-        const res = collide(p.x + (dirX / len) * spd * dt, p.z + (dirZ / len) * spd * dt, 0.6);
-        p.x = res.x;
-        p.z = res.z;
-        p.h = Math.atan2(dirX, dirZ);
+      if (!seq.current) {
+        const crouching = inp.crouch;
+        const running = inp.run && !crouching;
+        const spd = crouching ? 1.9 : running ? 7.6 : 3.6;
+        const mvz = inp.forward;
+        const mvx = inp.strafe;
+        const mag = Math.min(1, Math.hypot(mvx, mvz));
+        if (mag > 0.05) {
+          const yaw = look.yaw;
+          const dirX = Math.sin(yaw) * mvz + Math.cos(yaw) * mvx;
+          const dirZ = Math.cos(yaw) * mvz - Math.sin(yaw) * mvx;
+          const len = Math.hypot(dirX, dirZ) || 1;
+          const res = collide(p.x + (dirX / len) * spd * mag * dt, p.z + (dirZ / len) * spd * mag * dt, 0.45);
+          p.x = res.x;
+          p.z = res.z;
+          const targetH = Math.atan2(dirX, dirZ);
+          let diff = targetH - p.h;
+          while (diff > Math.PI) diff -= Math.PI * 2;
+          while (diff < -Math.PI) diff += Math.PI * 2;
+          p.h += diff * Math.min(1, dt * 12);
+          p.speed = mag;
+          setCharState(crouching ? "crouch" : running ? "run" : "walk");
+        } else {
+          p.speed = 0;
+          setCharState(crouching ? "crouch" : "idle");
+        }
       }
     }
 
@@ -250,40 +323,67 @@ export function PlayerRig() {
       carGroup.current.rotation.z = -c.vl * 0.012;
       carGroup.current.rotation.x = Math.max(-0.06, Math.min(0.06, -c.vf * 0.0015 * inp.throttle + (inp.brake ? 0.03 : 0)));
     }
+    if (doorRef.current) {
+      const open = seq.current ? (seq.current.mode === "in" ? Math.min(1, seq.current.t / 0.8) : 1 - Math.min(1, seq.current.t / 0.8)) : 0;
+      doorRef.current.visible = open > 0.02;
+      doorRef.current.rotation.y = -open * 1.1;
+    }
     if (pedGroup.current) {
-      pedGroup.current.visible = !s.driving;
+      const hidden = s.driving && !seq.current && (camMode !== "third" || false);
+      pedGroup.current.visible = !s.driving || !!seq.current;
+      void hidden;
       pedGroup.current.position.set(ped.current.x, 0, ped.current.z);
       pedGroup.current.rotation.y = ped.current.h;
     }
 
-    // camera
+    // ---- camera ----
     const fx = Math.sin(c.h);
     const fz = -Math.cos(c.h);
-    if (s.driving) {
+    if (s.driving && !seq.current) {
       if (camMode === "third") {
         tmp.set(c.x - fx * 9.5, 4.6, c.z - fz * 9.5);
-        camLook.current.lerp(tmp.clone().set(c.x + fx * 6, 1.6, c.z + fz * 6), Math.min(1, dt * 6));
+        camLook.current.lerp(tmp2.set(c.x + fx * 6, 1.6, c.z + fz * 6), Math.min(1, dt * 6));
         camPos.current.lerp(tmp, Math.min(1, dt * 5));
       } else if (camMode === "hood") {
         tmp.set(c.x + fx * 1.2, 1.75, c.z + fz * 1.2);
         camPos.current.lerp(tmp, Math.min(1, dt * 18));
-        camLook.current.lerp(
-          tmp.clone().set(c.x + fx * 14, 1.5, c.z + fz * 14),
-          Math.min(1, dt * 12),
-        );
+        camLook.current.lerp(tmp2.set(c.x + fx * 14, 1.5, c.z + fz * 14), Math.min(1, dt * 12));
       } else {
-        tmp.set(c.x - fx * 0.35 + Math.cos(c.h) * 0.35, 1.42, c.z - fz * 0.35 + Math.sin(c.h) * 0.35);
+        tmp.set(c.x - fx * 0.35 + Math.cos(c.h) * 0.35, 1.32, c.z - fz * 0.35 + Math.sin(c.h) * 0.35);
         camPos.current.lerp(tmp, Math.min(1, dt * 20));
-        camLook.current.lerp(
-          tmp.clone().set(c.x + fx * 14, 1.35, c.z + fz * 14),
-          Math.min(1, dt * 14),
-        );
+        camLook.current.lerp(tmp2.set(c.x + fx * 14, 1.25, c.z + fz * 14), Math.min(1, dt * 14));
       }
     } else {
       const p = ped.current;
-      tmp.set(p.x - Math.sin(p.h) * 6.5, 3.6, p.z - Math.cos(p.h) * 6.5);
-      camPos.current.lerp(tmp, Math.min(1, dt * 4));
-      camLook.current.lerp(tmp.clone().set(p.x, 1.4, p.z), Math.min(1, dt * 6));
+      const eye = 1.62 - (charState === "crouch" ? 0.34 : 0);
+      if (fpv && !seq.current && !s.driving) {
+        tmp.set(p.x, eye, p.z);
+        camPos.current.lerp(tmp, Math.min(1, dt * 22));
+        camLook.current.lerp(
+          tmp2.set(
+            p.x + Math.sin(look.yaw + Math.PI) * 8,
+            eye - Math.tan(look.pitch) * 8,
+            p.z + Math.cos(look.yaw + Math.PI) * 8,
+          ),
+          Math.min(1, dt * 22),
+        );
+      } else {
+        // orbiting boom arm with wall pull-in
+        let dist = look.dist;
+        const dirX = Math.sin(look.yaw);
+        const dirZ = Math.cos(look.yaw);
+        for (let step = dist; step > 0.9; step -= 0.5) {
+          if (!blocked(p.x + dirX * step, p.z + dirZ * step)) {
+            dist = step;
+            break;
+          }
+          dist = step - 0.5;
+        }
+        const height = 1.45 + Math.sin(look.pitch) * dist * 1.15;
+        tmp.set(p.x + dirX * dist * Math.cos(look.pitch), Math.max(0.6, height), p.z + dirZ * dist * Math.cos(look.pitch));
+        camPos.current.lerp(tmp, Math.min(1, dt * 9));
+        camLook.current.lerp(tmp2.set(p.x, 1.35, p.z), Math.min(1, dt * 11));
+      }
     }
     camera.position.copy(camPos.current);
     camera.lookAt(camLook.current);
@@ -293,6 +393,7 @@ export function PlayerRig() {
     const pz = s.driving ? c.z : ped.current.z;
     worldState.playerPos = [px, 0, pz];
     worldState.playerSpeed = c.vf;
+    worldState.playerHeading = s.driving ? c.h : ped.current.h;
     acc.current += dt;
     if (acc.current > 0.1) {
       acc.current = 0;
@@ -329,6 +430,14 @@ export function PlayerRig() {
             wheelSpin={car.current.wheelSpin}
           />
         )}
+        {/* swinging driver door used during the enter / exit animation */}
+        <group ref={doorRef} position={[0.92, 0.72, -0.5]} visible={false}>
+          <mesh position={[0.02, 0, 0.55]} castShadow>
+            <boxGeometry args={[0.08, 0.9, 1.1]} />
+            <meshStandardMaterial color={owned?.paint ?? "#888"} metalness={0.5} roughness={0.35} />
+          </mesh>
+        </group>
+        {driving && camMode === "interior" && <CarInterior steer={car.current.steer} />}
         {night && engineOn && (
           <>
             <primitive object={headlightTarget} position={[0, 0, -20]} />
@@ -346,14 +455,7 @@ export function PlayerRig() {
       </group>
 
       <group ref={pedGroup}>
-        <mesh position-y={0.9} castShadow>
-          <capsuleGeometry args={[0.32, 0.9, 4, 10]} />
-          <meshStandardMaterial color="#2f6fd0" roughness={0.6} />
-        </mesh>
-        <mesh position-y={1.62} castShadow>
-          <sphereGeometry args={[0.26, 12, 12]} />
-          <meshStandardMaterial color="#e0b48c" roughness={0.8} />
-        </mesh>
+        <Character state={charState} speed={ped.current.speed || 1} shirt="#28405e" pants="#242a33" />
       </group>
     </group>
   );

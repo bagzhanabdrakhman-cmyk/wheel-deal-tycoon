@@ -15,5 +15,6 @@ export const trafficLights = {
 export const worldState = {
   playerPos: [0, 0, 0] as [number, number, number],
   playerSpeed: 0,
+  playerHeading: 0,
   grip: 1,
 };
