@@ -20,7 +20,9 @@ export function Scene() {
       dpr={[1, 1.6]}
       gl={{ antialias: true, powerPreference: "high-performance" }}
       camera={{ position: [-67, 10, -34], fov: 58, near: 0.1, far: 600 }}
-      onCreated={({ gl }) => {
+      onCreated={(state) => {
+        const { gl } = state;
+        (window as unknown as { __three?: unknown }).__three = state;
         gl.toneMapping = THREE.ACESFilmicToneMapping;
         gl.toneMappingExposure = 1.02;
       }}
