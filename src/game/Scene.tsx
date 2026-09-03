@@ -52,11 +52,11 @@ export function Scene() {
         <Preload all />
       </Suspense>
       <Rain />
-      <EffectComposer enableNormalPass={false}>
+      {false && <EffectComposer enableNormalPass={false}>
         <Bloom intensity={0.28} luminanceThreshold={0.72} luminanceSmoothing={0.3} mipmapBlur />
         <Vignette offset={0.28} darkness={0.55} />
         <SMAA />
-      </EffectComposer>
+      </EffectComposer>}
     </Canvas>
   );
 }
